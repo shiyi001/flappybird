@@ -21,7 +21,7 @@ GAME = 'bird' # the name of the game being played for log files
 CONFIG = 'nothreshold'
 ACTIONS = 2 # number of valid actions
 GAMMA = 0.99 # decay rate of past observations
-OBSERVATION = 3200. # timesteps to observe before training
+OBSERVATION = 10000. # timesteps to observe before training
 EXPLORE = 3000000. # frames over which to anneal epsilon
 FINAL_EPSILON = 0.0001 # final value of epsilon
 INITIAL_EPSILON = 0.1 # starting value of epsilon
@@ -52,20 +52,23 @@ def main():
     x_t = skimage.exposure.rescale_intensity(x_t,out_range=(0,255))
 
     x_t = (x_t / 255.0).astype(np.float32)
-    
+
     s_t = np.stack((x_t, x_t, x_t, x_t), axis=0)
 
-    s_t = s_t.reshape(1, s_t.shape[0], s_t.shape[1], s_t.shape[2])  
- 
+    s_t = s_t.reshape(1, s_t.shape[0], s_t.shape[1], s_t.shape[2])
+
     if args['mode'] == 'Run':
         OBSERVE = 999999999    #We keep observe, never train
         epsilon = FINAL_EPSILON
         print ("Now we load weight")
-
-        print ("Weight load successfully")    
+        checkpoint = torch.load("model.pth")
+        model.load_state_dict(checkpoint["state_dict"])
+        print ("Weight load successfully")
+        model.eval()
     else:                       #We go to training mode
         OBSERVE = OBSERVATION
         epsilon = INITIAL_EPSILON
+        model.train()
 
     t = 0
     while (True):
@@ -76,12 +79,12 @@ def main():
         a_t = np.zeros([ACTIONS])
         #choose an action epsilon greedy
         if t % FRAME_PER_ACTION == 0:
-            if random.random() <= epsilon:
+            if (t < OBSERVE) or (random.random() <= epsilon):
                 print("----------Random Action----------")
                 action_index = random.randrange(ACTIONS)
                 a_t[action_index] = 1
             else:
-                q = model(torch.from_numpy(s_t))       
+                q = model(torch.from_numpy(s_t))
                 max_Q = np.argmax(q.detach().numpy())
                 action_index = max_Q
                 a_t[max_Q] = 1
@@ -102,7 +105,7 @@ def main():
 
 
         x_t1 = x_t1.reshape(1, 1, x_t1.shape[0], x_t1.shape[1]) #1x80x80x1
-        
+
         s_t1 = np.append(x_t1, s_t[:, :3, :, :], axis=1)
 
         # store the transition in D
@@ -137,15 +140,15 @@ def main():
             loss.backward()
             optimizer.step()
 
-        s_t = s_t1
-        t = t + 1
-
         # save progress every 10000 iterations
-        # if t % 1000 == 0:
-        #     print("Now we save model")
-        #     model.save_weights("model.h5", overwrite=True)
-        #     with open("model.json", "w") as outfile:
-        #         json.dump(model.to_json(), outfile)
+        if (args["mode"] == "Train") and (t % 10000 == 0):
+            print("Saving checkpoint...")
+            torch.save({
+                'iters': t,
+                'state_dict': model.state_dict(),
+                }, 'model.pth')
+        t = t + 1
+        s_t = s_t1
 
         # print info
         state = ""
@@ -156,9 +159,9 @@ def main():
         else:
             state = "train"
 
-        print("TIMESTEP", t, "/ STATE", state, \
-            "/ EPSILON", epsilon, "/ ACTION", action_index, "/ REWARD", r_t, \
-            "/ Q_MAX " , np.max(Q_sa), "/ Loss ", loss_to_show)
+        print("TIMESTEP", t, "| STATE", state, \
+            "| EPSILON", epsilon, "| ACTION", action_index, "| REWARD", r_t, \
+            "| Q_MAX " , np.max(Q_sa), "| Loss ", loss_to_show)
 
     print("Episode finished!")
 
