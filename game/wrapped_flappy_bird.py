@@ -83,6 +83,20 @@ class GameState:
                 #SOUNDS['point'].play()
                 reward = 1
 
+        if (self.playery <= SCREENHEIGHT // 4):
+            if (input_actions[1]) == 1:
+                reward = 0.05
+        if (self.playery >= SCREENHEIGHT // 4 * 3):
+            if (input_actions[0] == 1):
+                reward = 0.05
+
+        # check if hit the bottom or top
+        if (self.playery <= 0) or (self.playery >=SCREENHEIGHT):
+            if input_actions[1] == 1:
+                reward = -0.2
+            else:
+                reward = -0.1
+
         # playerIndex basex change
         if (self.loopIter + 1) % 3 == 0:
             self.playerIndex = next(PLAYER_INDEX_GEN)
