@@ -17,7 +17,7 @@ SCREEN = pygame.display.set_mode((SCREENWIDTH, SCREENHEIGHT))
 pygame.display.set_caption('Flappy Bird')
 
 IMAGES, SOUNDS, HITMASKS = flappy_bird_utils.load()
-PIPEGAPSIZE = 100 # gap between upper and lower part of pipe
+PIPEGAPSIZE = 200 # gap between upper and lower part of pipe
 BASEY = SCREENHEIGHT * 0.79
 
 PLAYER_WIDTH = IMAGES['player'][0].get_width()
@@ -82,6 +82,20 @@ class GameState:
                 self.score += 1
                 #SOUNDS['point'].play()
                 reward = 1
+
+        if (self.playery <= SCREENHEIGHT // 4):
+            if (input_actions[1]) == 1:
+                reward = 0.05
+        if (self.playery + PLAYER_HEIGHT >= SCREENHEIGHT // 4 * 3):
+            if (input_actions[0] == 1):
+                reward = 0.05
+
+        # check if hit the bottom or top
+        if (self.playery <= 0) or (self.playery >=SCREENHEIGHT):
+            if input_actions[1] == 1:
+                reward = -0.2
+            else:
+                reward = -0.1
 
         # playerIndex basex change
         if (self.loopIter + 1) % 3 == 0:

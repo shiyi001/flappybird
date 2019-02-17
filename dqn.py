@@ -22,14 +22,14 @@ GAME = 'bird' # the name of the game being played for log files
 CONFIG = 'nothreshold'
 ACTIONS = 2 # number of valid actions
 GAMMA = 0.99 # decay rate of past observations
-OBSERVATION = 32. # timesteps to observe before training
+OBSERVATION = 3000. # timesteps to observe before training
 EXPLORE = 3000000. # frames over which to anneal epsilon
 FINAL_EPSILON = 0.0001 # final value of epsilon
 INITIAL_EPSILON = 0.1 # starting value of epsilon
 REPLAY_MEMORY = 50000 # number of previous transitions to remember
 BATCH = 32 # size of minibatch
 FRAME_PER_ACTION = 1
-LEARNING_RATE = 1e-4
+LEARNING_RATE = 1e-6
 
 def initalize(game_state):
     do_nothing = np.zeros(ACTION_NUM)
@@ -63,12 +63,18 @@ def get_next_state(s_t, x_t):
 def main():
     parser = argparse.ArgumentParser(description='Description of your program')
     parser.add_argument('-m','--mode', help='Train / Run', required=True)
+    parser.add_argument('--checkpoint', default="final/easy.pth", type=str, metavar='PATH',
+            help="path to your checkpoint")
+    parser.add_argument('--resume', default="", type=str, metavar='PATH',
+            help="path to resume(defailt: none)")
     args = vars(parser.parse_args())
 
     model = MyModel()
-    optimizer = torch.optim.SGD(model.parameters(), LEARNING_RATE)
-    loss_func = torch.nn.MSELoss()
+    if torch.cuda.is_available():
+        model = model.cuda()
 
+    optimizer = torch.optim.Adam(model.parameters(), LEARNING_RATE)
+    loss_func = torch.nn.MSELoss()
     game_state = game.GameState()
 
     memory = DataMemory(REPLAY_MEMORY)
@@ -76,14 +82,23 @@ def main():
     s_t = initalize(game_state)
     
     if args['mode'] == 'Run':
-        OBSERVE = 999999999    #We keep observe, never train
+        OBSERVE = 999999999
         epsilon = FINAL_EPSILON
-        print ("Now we load weight")
-        checkpoint = torch.load("model.pth")
+        print ("Loading weight from {}...".format(args["checkpoint"]))
+        if torch.cuda.is_available():
+            checkpoint = torch.load(args["checkpoint"])
+        else:
+            checkpoint = torch.load(args["checkpoint"], map_location='cpu')
         model.load_state_dict(checkpoint["state_dict"])
-        print ("Weight load successfully")
+        print ("Weight loaded successfully")
         model.eval()
-    else:                       #We go to training mode
+    else:
+        if args["resume"]:
+            if torch.cuda.is_available():
+                checkpoint = torch.load(args["resume"])
+            else:
+                checkpoint = torch.load(args["resume"], map_location='cpu')
+            model.load_state_dict(checkpoint["state_dict"])
         OBSERVE = OBSERVATION
         epsilon = INITIAL_EPSILON
         model.train()
@@ -97,13 +112,23 @@ def main():
         a_t = np.zeros([ACTIONS])
         #choose an action epsilon greedy
         if t % FRAME_PER_ACTION == 0:
-            if (t < OBSERVE) or (random.random() <= epsilon):
+            if (random.random() <= epsilon):
                 print("----------Random Action----------")
-                action_index = random.randrange(ACTIONS)
+                if random.random() > 0.1:
+                    action_index = 0
+                else:
+                    action_index = 1
+                # action_index = random.randrange(ACTIONS)
                 a_t[action_index] = 1
             else:
-                q = model(torch.from_numpy(s_t))
-                max_Q = np.argmax(q.detach().numpy())
+                if torch.cuda.is_available():
+                    q = model(torch.from_numpy(s_t).cuda())
+                    # print (q.cpu().detach().numpy())
+                    max_Q = np.argmax(q.cpu().detach().numpy())
+                else:
+                    q = model(torch.from_numpy(s_t))
+                    # print (q.detach().numpy())
+                    max_Q = np.argmax(q.detach().numpy())
                 action_index = max_Q
                 a_t[max_Q] = 1
 
@@ -126,13 +151,23 @@ def main():
             state_t, action_t, reward_t, state_next, terminal = \
                 memory.gen_minibatch(BATCH)
 
-            Q_output = model(torch.from_numpy(state_t))
-            Q_eval = Q_output[range(Q_output.shape[0]), action_t].view(BATCH, 1)
+            if torch.cuda.is_available():
+                Q_output = model(torch.from_numpy(state_t).cuda())
+                Q_eval = Q_output[range(Q_output.shape[0]), action_t].view(BATCH, 1)
 
-            Q_next = model(torch.from_numpy(state_next)).detach()
-            Q_next_mask = Q_next.max(1)[0].view(BATCH, 1)
-            Q_target = torch.from_numpy(reward_t) + \
-                GAMMA * Q_next_mask * torch.from_numpy(terminal)
+                Q_next = model(torch.from_numpy(state_next).cuda()).detach()
+                Q_next_mask = Q_next.max(1)[0].view(BATCH, 1)
+                Q_target = torch.from_numpy(reward_t).cuda() + \
+                    GAMMA * Q_next_mask * torch.from_numpy(terminal).cuda()
+
+            else:
+                Q_output = model(torch.from_numpy(state_t))
+                Q_eval = Q_output[range(Q_output.shape[0]), action_t].view(BATCH, 1)
+
+                Q_next = model(torch.from_numpy(state_next)).detach()
+                Q_next_mask = Q_next.max(1)[0].view(BATCH, 1)
+                Q_target = torch.from_numpy(reward_t) + \
+                    GAMMA * Q_next_mask * torch.from_numpy(terminal)
 
             loss = loss_func(Q_eval, Q_target)
 
@@ -147,7 +182,7 @@ def main():
             torch.save({
                 'iters': t,
                 'state_dict': model.state_dict(),
-                }, 'model.pth')
+                }, 'easy/model_{}.pth'.format(t))
         t = t + 1
         s_t = s_n
 
@@ -162,7 +197,7 @@ def main():
 
         print("TIMESTEP", t, "| STATE", state, \
             "| EPSILON", epsilon, "| ACTION", action_index, "| REWARD", r_t, \
-            "| Q_MAX " , np.max(Q_sa), "| Loss ", loss_to_show)
+            "| Loss ", loss_to_show)
 
     print("Episode finished!")
 
