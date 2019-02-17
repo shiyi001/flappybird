@@ -21,8 +21,8 @@ GAME = 'bird' # the name of the game being played for log files
 CONFIG = 'nothreshold'
 ACTIONS = 2 # number of valid actions
 GAMMA = 0.99 # decay rate of past observations
-OBSERVATION = 1000. # timesteps to observe before training
-EXPLORE = 1000000. # frames over which to anneal epsilon
+OBSERVATION = 3000. # timesteps to observe before training
+EXPLORE = 3000000. # frames over which to anneal epsilon
 FINAL_EPSILON = 0.0001 # final value of epsilon
 INITIAL_EPSILON = 0.1 # starting value of epsilon
 REPLAY_MEMORY = 50000 # number of previous transitions to remember
@@ -33,6 +33,10 @@ LEARNING_RATE = 1e-6
 def main():
     parser = argparse.ArgumentParser(description='Description of your program')
     parser.add_argument('-m','--mode', help='Train / Run', required=True)
+    parser.add_argument('--checkpoint', default="final/easy.pth", type=str, metavar='PATH',
+            help="path to your checkpoint")
+    parser.add_argument('--resume', default="", type=str, metavar='PATH',
+            help="path to resume(defailt: none)")
     args = vars(parser.parse_args())
 
     model = MyModel()
@@ -61,16 +65,17 @@ def main():
     s_t = s_t.reshape(1, s_t.shape[0], s_t.shape[1], s_t.shape[2])
 
     if args['mode'] == 'Run':
-        OBSERVE = 999999999    #We keep observe, never train
+        OBSERVE = 999999999
         epsilon = FINAL_EPSILON
-        print ("Now we load weight")
-        checkpoint = torch.load("checkpoint/model_1500000.pth")
+        print ("Loading weight from {}...".format(args["checkpoint"]))
+        checkpoint = torch.load(args["checkpoint"])
         model.load_state_dict(checkpoint["state_dict"])
-        print ("Weight load successfully")
+        print ("Weight loaded successfully")
         model.eval()
-    else:                       #We go to training mode
-        checkpoint = torch.load("checkpoint/model_1400000.pth")
-        model.load_state_dict(checkpoint["state_dict"])
+    else:
+        if args["resume"]:
+            checkpoint = torch.load(args["resume"])
+            model.load_state_dict(checkpoint["state_dict"])
         OBSERVE = OBSERVATION
         epsilon = INITIAL_EPSILON
         model.train()
@@ -171,7 +176,7 @@ def main():
             torch.save({
                 'iters': t,
                 'state_dict': model.state_dict(),
-                }, 'fake/model_{}.pth'.format(t))
+                }, 'easy/model_{}.pth'.format(t))
         t = t + 1
         s_t = s_t1
 
@@ -186,7 +191,7 @@ def main():
 
         print("TIMESTEP", t, "| STATE", state, \
             "| EPSILON", epsilon, "| ACTION", action_index, "| REWARD", r_t, \
-            "| Q_MAX " , np.max(Q_sa), "| Loss ", loss_to_show)
+            "| Loss ", loss_to_show)
 
     print("Episode finished!")
 
