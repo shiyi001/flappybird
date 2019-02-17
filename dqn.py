@@ -2,6 +2,7 @@ import sys
 sys.path.append("game/")
 import wrapped_flappy_bird as game
 from model import MyModel
+from memory import DataMemory
 
 import torch
 
@@ -30,6 +31,35 @@ BATCH = 32 # size of minibatch
 FRAME_PER_ACTION = 1
 LEARNING_RATE = 1e-6
 
+def initalize(game_state):
+    do_nothing = np.zeros(ACTION_NUM)
+    do_nothing[0] = 1
+    x_t, r_0, terminal = game_state.frame_step(do_nothing)
+
+    x_t = process_img(x_t)
+
+    s_t = np.stack((x_t, x_t, x_t, x_t), axis=0)
+
+    s_t = s_t.reshape(1, s_t.shape[0], s_t.shape[1], s_t.shape[2])
+
+    return s_t
+
+def process_img(x_t):
+    x_t = skimage.color.rgb2gray(x_t)
+    x_t = skimage.transform.resize(x_t, (IMG_HEIGHT, IMG_WIDTH))
+    x_t = skimage.exposure.rescale_intensity(x_t,out_range=(0,255))
+
+    x_t = (x_t / 255.0).astype(np.float32)
+
+    return x_t
+
+def get_next_state(s_t, x_t):
+    x_t = x_t.reshape(1, 1, x_t.shape[0], x_t.shape[1])
+
+    s_n = np.append(x_t, s_t[:, :3, :, :], axis=1)
+
+    return s_n
+
 def main():
     parser = argparse.ArgumentParser(description='Description of your program')
     parser.add_argument('-m','--mode', help='Train / Run', required=True)
@@ -45,36 +75,29 @@ def main():
 
     optimizer = torch.optim.Adam(model.parameters(), LEARNING_RATE)
     loss_func = torch.nn.MSELoss()
-
     game_state = game.GameState()
 
-    memory = deque()
+    memory = DataMemory(REPLAY_MEMORY)
 
-    do_nothing = np.zeros(ACTION_NUM)
-    do_nothing[0] = 1
-    x_t, r_0, terminal = game_state.frame_step(do_nothing)
-
-    x_t = skimage.color.rgb2gray(x_t)
-    x_t = skimage.transform.resize(x_t, (IMG_HEIGHT, IMG_WIDTH))
-    x_t = skimage.exposure.rescale_intensity(x_t,out_range=(0,255))
-
-    x_t = (x_t / 255.0).astype(np.float32)
-
-    s_t = np.stack((x_t, x_t, x_t, x_t), axis=0)
-
-    s_t = s_t.reshape(1, s_t.shape[0], s_t.shape[1], s_t.shape[2])
-
+    s_t = initalize(game_state)
+    
     if args['mode'] == 'Run':
         OBSERVE = 999999999
         epsilon = FINAL_EPSILON
         print ("Loading weight from {}...".format(args["checkpoint"]))
-        checkpoint = torch.load(args["checkpoint"])
+        if torch.cuda.is_available():
+            checkpoint = torch.load(args["checkpoint"])
+        else:
+            checkpoint = torch.load(args["checkpoint"], map_location='cpu')
         model.load_state_dict(checkpoint["state_dict"])
         print ("Weight loaded successfully")
         model.eval()
     else:
         if args["resume"]:
-            checkpoint = torch.load(args["resume"])
+            if torch.cuda.is_available():
+                checkpoint = torch.load(args["resume"])
+            else:
+                checkpoint = torch.load(args["resume"], map_location='cpu')
             model.load_state_dict(checkpoint["state_dict"])
         OBSERVE = OBSERVATION
         epsilon = INITIAL_EPSILON
@@ -114,36 +137,19 @@ def main():
             epsilon -= (INITIAL_EPSILON - FINAL_EPSILON) / EXPLORE
 
         #run the selected action and observed next state and reward
-        x_t1_colored, r_t, terminal = game_state.frame_step(a_t)
+        x_t_colored, r_t, terminal = game_state.frame_step(a_t)
 
-        x_t1 = skimage.color.rgb2gray(x_t1_colored)
-        x_t1 = skimage.transform.resize(x_t1,(80,80))
-        x_t1 = skimage.exposure.rescale_intensity(x_t1, out_range=(0, 255))
+        x_t = process_img(x_t_colored)
 
+        s_n = get_next_state(s_t, x_t)
 
-        x_t1 = (x_t1 / 255.0).astype(np.float32)
-
-
-        x_t1 = x_t1.reshape(1, 1, x_t1.shape[0], x_t1.shape[1]) #1x80x80x1
-
-        s_t1 = np.append(x_t1, s_t[:, :3, :, :], axis=1)
-
-        # store the transition in D
-        memory.append((s_t, action_index, r_t, s_t1, float(terminal)))
-        if len(memory) > REPLAY_MEMORY:
-            memory.popleft()
+        # store the transition in DataMemory
+        memory.add(s_t, action_index, r_t, s_n, float(terminal))
 
         #only train if done observing
         if t > OBSERVE:
-            #sample a minibatch to train on
-            minibatch = random.sample(memory, BATCH)
-
-            #Now we do the experience replay
-            state_t, action_t, reward_t, state_next, terminal = zip(*minibatch)
-            state_t = np.concatenate(state_t)
-            state_next = np.concatenate(state_next)
-            reward_t = np.array(reward_t).astype(np.float32).reshape(BATCH, 1)
-            terminal = np.array(terminal).astype(np.float32).reshape(BATCH, 1)
+            state_t, action_t, reward_t, state_next, terminal = \
+                memory.gen_minibatch(BATCH)
 
             if torch.cuda.is_available():
                 Q_output = model(torch.from_numpy(state_t).cuda())
@@ -178,7 +184,7 @@ def main():
                 'state_dict': model.state_dict(),
                 }, 'easy/model_{}.pth'.format(t))
         t = t + 1
-        s_t = s_t1
+        s_t = s_n
 
         # print info
         state = ""
